@@ -90,7 +90,7 @@ class SequencerImportMovieOperator(Operator):
         if not os.path.isdir(model_dir):
             os.mkdir(model_dir)
         if not os.path.isfile(check_config):
-            snapshot_download(repo_id='damo-vilab/modelscope-damo-text-to-video-synthesis',
+            snapshot_download(repo_id='kabachuha/modelscope-damo-text2video-pruned-weights',
                               repo_type='model',
                               local_dir=model_dir,
                               local_dir_use_symlinks=False)
