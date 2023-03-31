@@ -108,14 +108,28 @@ class SequencerImportMovieOperator(Operator):
         import_module(self, "gast", "gast")
         import_module(self, "diffusers", "diffusers")
         import_module(self, "tensorflow", "tensorflow")
-        import_module(self, "cffi", "cffi")
+        #import_module(self, "torch", "--index-url https://download.pytorch.org/whl/cu118")
+        subprocess.check_call([pybin, "-m", "pip", "install", "torch", "--index-url", "https://download.pytorch.org/whl/cu200"])
+        #torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+        import_module(self, "diffusers", "git+https://github.com/huggingface/diffusers.git")
+        import_module(self, "transformers", "git+https://github.com/huggingface/transformers.git")
+        import_module(self, "accelerate", "accelerate")
+        import_module(self, "opencv_python", "opencv_python")
         import_module(self, "modelscope", "modelscope==1.4.2") #git+https://github.com/modelscope/modelscope.git
 
         from huggingface_hub import snapshot_download
 
         from modelscope.pipelines import pipeline
         from modelscope.outputs import OutputKeys
+        import torch
+
+        import gc
+        #from pathlib import Path
         import pathlib
+
+        import cv2
+        import torch
+        from diffusers import DiffusionPipeline
 
         script_file = os.path.realpath(__file__)
         directory = os.path.dirname(script_file)
@@ -143,15 +157,80 @@ class SequencerImportMovieOperator(Operator):
                               local_dir=model_dir,
                               local_dir_use_symlinks=False)
 
-        p = pipeline('text-to-video-synthesis', model_dir)#, torch_dtype=torch.float16, variant="fp16")
 
-        test_text = {"text": self.text_prompt}
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+#        torch.zeros(1).cpu()
+#        # Run model
+#        pipeline = make_pipeline_generator(
+#            device=device, cpu_offload=cpu_offload, attention_slice=attention_slice
+#        )
+        generator = torch.Generator(device=torch.device(device))#.manual_seed(seed)
+#        video = pipeline(
+#            prompt=prompt,
+#            num_frames=num_frames,
+#            num_inference_steps=num_steps,
+#            height=height,
+#            width=width,
+#            generator=generator,
+#        ).frames
+#kabachuha/modelscope-damo-text2video-pruned-weights
+
+        p = pipeline( 'text-to-video-synthesis', model_dir, #'text-to-video-synthesis',
+            variant="fp16",
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        )        
+        p = p.to(torch.device(device))        
+
+
+        prompt = {"text": self.text_prompt}
         num_frames = {"num_frames": 10}
-        
+#        
         output_video_path = p(
-            test_text,
-            num_frames,
+            prompt=prompt,
+            num_frames=nnum_frames,
+            generator=generator,
         )[OutputKeys.OUTPUT_VIDEO]
+
+        #p = pipeline('text-to-video-synthesis', model_dir)#, torch_dtype=torch.float16, variant="fp16")
+
+#        test_text = {"text": self.text_prompt}
+#        num_frames = {"num_frames": 10}
+#        
+#        output_video_path = p(
+#            test_text,
+#            num_frames,
+#        )[OutputKeys.OUTPUT_VIDEO]
+        # Run model
+
+#        pipeline = DiffusionPipeline.pretrained_model_name_or_path(
+#            model_dir,
+#            variant="fp16",
+#            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+#        )
+#        pipeline = pipeline.to(torch.device(device))
+#        if cpu_offload:
+#            pipeline.enable_sequential_cpu_offload()
+#        if attention_slice:
+#        pipeline.enable_attention_slicing()
+
+#        generator = torch.Generator(device=torch.device(device))#.manual_seed(seed)
+
+
+#        output_video_path = pipeline(
+#            prompt=prompt,
+#            num_frames=num_frames,
+#            #num_inference_steps=num_steps,
+#            #height=height,
+#            #width=width,
+#            generator=generator,
+#        )[OutputKeys.OUTPUT_VIDEO]
+
+
 
         filepath = bpy.path.abspath(output_video_path)
         if os.path.isfile(filepath):
@@ -163,6 +242,9 @@ class SequencerImportMovieOperator(Operator):
             )
         else:
             print("Modelscope did not produce a file!")
+
+        # Clean up memory
+        torch.cuda.empty_cache()
             
         return {"FINISHED"}
 
