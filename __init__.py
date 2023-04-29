@@ -260,6 +260,7 @@ class GeneratorAddonPreferences(AddonPreferences):
         items=[
             ("runwayml/stable-diffusion-v1-5", "Stable Diffusion 1.5 (512x512)", "Stable Diffusion 1.5"),
             ("stabilityai/stable-diffusion-2", "Stable Diffusion 2 (768x768)", "Stable Diffusion 2"),
+            ("DeepFloyd/IF-I-XL-v1.0", "DeepFloyd/IF-I-XL-v1.0", "DeepFloyd"),
         ],
         default="stabilityai/stable-diffusion-2",
     )
@@ -274,6 +275,11 @@ class GeneratorAddonPreferences(AddonPreferences):
         default="cvssp/audioldm-s-full-v2",
     )
 
+    hugginface_token: bpy.props.StringProperty(
+        name="Hugginface Token",
+        default="hugginface_token",
+        subtype = "PASSWORD",
+    )
 
     def draw(self, context):
         layout = self.layout
@@ -281,6 +287,10 @@ class GeneratorAddonPreferences(AddonPreferences):
         box.operator("sequencer.install_generator")
         box.prop(self, "movie_model_card")
         box.prop(self, "image_model_card")
+        if self.image_model_card == "DeepFloyd/IF-I-XL-v1.0":
+            row = box.row(align=True)
+            row.prop(self, "hugginface_token")
+            row.operator("wm.url_open", text="", icon='URL').url = "https://huggingface.co/settings/tokens"
         box.prop(self, "audio_model_card")
         row = box.row(align=True)
         row.label(text="Notification:")
@@ -789,6 +799,7 @@ class SEQUENCER_OT_generate_image(Operator):
 
         try:
             from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
+            from diffusers.utils import pt_to_pil
             import torch
         except ModuleNotFoundError:
             print("Dependencies needs to be installed in the add-on preferences.")
@@ -821,18 +832,43 @@ class SEQUENCER_OT_generate_image(Operator):
         addon_prefs = preferences.addons[__name__].preferences
         image_model_card = addon_prefs.image_model_card
 
-        # Options: https://huggingface.co/docs/diffusers/api/pipelines/text_to_video
-        pipe = DiffusionPipeline.from_pretrained(
-            image_model_card,
-            torch_dtype=torch.float16,
-            variant="fp16",
-        )
+        if image_model_card == "DeepFloyd/IF-I-XL-v1.0":
+            from huggingface_hub.commands.user import login
+            result = login(token = addon_prefs.hugginface_token)
+            print("Login: " + str(result))
+            
+            # stage 1
+            stage_1 = DiffusionPipeline.from_pretrained("DeepFloyd/IF-I-XL-v1.0", variant="fp16", torch_dtype=torch.float16)
+            stage_1.enable_model_cpu_offload()
 
-        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+            # stage 2
+            stage_2 = DiffusionPipeline.from_pretrained(
+                "DeepFloyd/IF-II-L-v1.0", text_encoder=None, variant="fp16", torch_dtype=torch.float16
+            )
+            stage_2.enable_model_cpu_offload()
 
-        # memory optimization
-        pipe.enable_model_cpu_offload()
-        pipe.enable_vae_slicing()
+            # stage 3
+            safety_modules = {
+                "feature_extractor": stage_1.feature_extractor,
+                "safety_checker": stage_1.safety_checker,
+                "watermarker": stage_1.watermarker,
+            }
+            stage_3 = DiffusionPipeline.from_pretrained(
+                "stabilityai/stable-diffusion-x4-upscaler", **safety_modules, torch_dtype=torch.float16
+            )
+            stage_3.enable_model_cpu_offload()
+        else: # stable Diffusion
+            pipe = DiffusionPipeline.from_pretrained(
+                image_model_card,
+                torch_dtype=torch.float16,
+                variant="fp16",
+            )
+
+            pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+
+            # memory optimization
+            pipe.enable_model_cpu_offload()
+            pipe.enable_vae_slicing()
 
         for i in range(scene.movie_num_batch):
             #wm.progress_update(i)
@@ -872,15 +908,38 @@ class SEQUENCER_OT_generate_image(Operator):
                 else:
                     generator = None
 
-            image = pipe(
-                prompt,
-                negative_prompt=negative_prompt,
-                num_inference_steps=image_num_inference_steps,
-                guidance_scale=image_num_guidance,
-                height=y,
-                width=x,
-                generator=generator,
-            ).images[0]
+            if image_model_card == "DeepFloyd/IF-I-XL-v1.0":
+                
+                # stage 1
+                image = stage_1(
+                    prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_embeds, generator=generator, output_type="pt"
+                ).images
+                pt_to_pil(image)[0].save("./if_stage_I.png")
+                
+                # stage 2
+                image = stage_2(
+                    image=image,
+                    prompt_embeds=prompt_embeds,
+                    negative_prompt_embeds=negative_embeds,
+                    generator=generator,
+                    output_type="pt",
+                ).images
+                pt_to_pil(image)[0].save("./if_stage_II.png")
+                
+                # stage 3
+                image = stage_3(prompt=prompt, image=image, noise_level=100, generator=generator).images
+                image[0].save("./if_stage_III.png")
+
+            else: # Stable Diffusion
+                image = pipe(
+                    prompt,
+                    negative_prompt=negative_prompt,
+                    num_inference_steps=image_num_inference_steps,
+                    guidance_scale=image_num_guidance,
+                    height=y,
+                    width=x,
+                    generator=generator,
+                ).images[0]
 
             # Move to folder
             filename = clean_filename(context.scene.generate_movie_prompt)
@@ -1053,7 +1112,7 @@ def register():
         max=100,
     )
 
-    # The frame ausio duration.
+    # The frame audio duration.
     bpy.types.Scene.audio_length_in_f = bpy.props.IntProperty(
         name="audio_length_in_f",
         default=80,
