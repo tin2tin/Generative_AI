@@ -207,6 +207,8 @@ def install_modules(self):
     import_module(self, "diffusers", "diffusers")
     import_module(self, "accelerate", "accelerate")
     import_module(self, "transformers", "transformers")
+    import_module(self, "sentencepiece", "sentencepiece")
+    import_module(self, "safetensors", "safetensors")
     import_module(self, "cv2", "opencv_python")
     import_module(self, "scipy", "scipy")
     import_module(self, "xformers", "xformers")
@@ -260,7 +262,7 @@ class GeneratorAddonPreferences(AddonPreferences):
         items=[
             ("runwayml/stable-diffusion-v1-5", "Stable Diffusion 1.5 (512x512)", "Stable Diffusion 1.5"),
             ("stabilityai/stable-diffusion-2", "Stable Diffusion 2 (768x768)", "Stable Diffusion 2"),
-            ("DeepFloyd/IF-I-XL-v1.0", "DeepFloyd/IF-I-XL-v1.0", "DeepFloyd"),
+            ("DeepFloyd/IF-I-M-v1.0", "DeepFloyd/IF-I-M-v1.0", "DeepFloyd"),
         ],
         default="stabilityai/stable-diffusion-2",
     )
@@ -287,7 +289,7 @@ class GeneratorAddonPreferences(AddonPreferences):
         box.operator("sequencer.install_generator")
         box.prop(self, "movie_model_card")
         box.prop(self, "image_model_card")
-        if self.image_model_card == "DeepFloyd/IF-I-XL-v1.0":
+        if self.image_model_card == "DeepFloyd/IF-I-M-v1.0":
             row = box.row(align=True)
             row.prop(self, "hugginface_token")
             row.operator("wm.url_open", text="", icon='URL').url = "https://huggingface.co/settings/tokens"
@@ -314,6 +316,10 @@ class GENERATOR_OT_install(Operator):
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
         install_modules(self)
+        self.report(
+            {"INFO"},
+            "Installation of dependencies is finished.",
+        )        
         return {"FINISHED"}
 
 
@@ -832,18 +838,18 @@ class SEQUENCER_OT_generate_image(Operator):
         addon_prefs = preferences.addons[__name__].preferences
         image_model_card = addon_prefs.image_model_card
 
-        if image_model_card == "DeepFloyd/IF-I-XL-v1.0":
+        if image_model_card == "DeepFloyd/IF-I-M-v1.0":
             from huggingface_hub.commands.user import login
             result = login(token = addon_prefs.hugginface_token)
             print("Login: " + str(result))
             
             # stage 1
-            stage_1 = DiffusionPipeline.from_pretrained("DeepFloyd/IF-I-XL-v1.0", variant="fp16", torch_dtype=torch.float16)
+            stage_1 = DiffusionPipeline.from_pretrained("DeepFloyd/IF-I-M-v1.0", variant="fp16", torch_dtype=torch.float16)
             stage_1.enable_model_cpu_offload()
 
             # stage 2
             stage_2 = DiffusionPipeline.from_pretrained(
-                "DeepFloyd/IF-II-L-v1.0", text_encoder=None, variant="fp16", torch_dtype=torch.float16
+                "DeepFloyd/IF-II-M-v1.0", text_encoder=None, variant="fp16", torch_dtype=torch.float16
             )
             stage_2.enable_model_cpu_offload()
 
@@ -908,7 +914,7 @@ class SEQUENCER_OT_generate_image(Operator):
                 else:
                     generator = None
 
-            if image_model_card == "DeepFloyd/IF-I-XL-v1.0":
+            if image_model_card == "DeepFloyd/IF-I-M-v1.0":
                 
                 # stage 1
                 image = stage_1(
